@@ -15,7 +15,7 @@
   "content_scripts": [
     {
       "js": [
-        "assets/content-script.ts-BV-uMlyQ.js"
+        "assets/content-script.ts-EPHrDVJM.js"
       ],
       "matches": [
         "https://*.depop.com/*",
@@ -81,8 +81,8 @@
         "https://*.zara.com/*"
       ],
       "resources": [
-        "assets/content-script.ts-BV-uMlyQ.js",
-        "assets/content-script.ts-BV-uMlyQ.js.map"
+        "assets/content-script.ts-EPHrDVJM.js",
+        "assets/content-script.ts-EPHrDVJM.js.map"
       ],
       "use_dynamic_url": false
     }
