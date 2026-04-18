@@ -1,11 +1,9 @@
-// Photon AI — in-store tag scanner via iMessage/SMS
-// User texts a photo of a clothing tag to a Twilio number.
+// Photon AI — in-store tag scanner via iMessage
 // K2-Think v2 vision: extract brand/materials + score sustainability in one call.
-// Dedalus brand audit runs in parallel to enrich certifications.
+// Dedalus brand audit runs after for certifications.
 //
-// Twilio MMS webhook: POST application/x-www-form-urlencoded
-//   From, Body, NumMedia, MediaUrl0, MediaContentType0
-// Direct API: POST application/json { imageUrl, phoneNumber? }
+// Photon Spectrum-TS bot: POST application/json { imageUrl, phoneNumber? }
+// Twilio MMS fallback:    POST application/x-www-form-urlencoded (From, NumMedia, MediaUrl0…)
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.3'
 
@@ -14,7 +12,6 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-// K2-Think v2 — multimodal reasoning model (vision + text)
 const K2_V2_MODEL_ID = Deno.env.get('IFM_MODEL_ID') ?? 'LLM360/K2-Think-v2'
 
 Deno.serve(async (req) => {
@@ -35,10 +32,11 @@ Deno.serve(async (req) => {
       const numMedia = parseInt(form.get('NumMedia') as string ?? '0', 10)
 
       if (numMedia === 0) {
-        return twilioReply('Please send a photo of the clothing tag — no image was received.')
+        return twilioReply('Send a photo of the clothing tag — no image was received.')
       }
 
-      imageUrl = form.get('MediaUrl0') as string
+      // Use the first image attachment (Twilio can send multiple)
+      imageUrl = pickImageUrl(form, numMedia)
       if (!imageUrl) {
         return twilioReply('Could not read the image. Please try again.')
       }
@@ -55,18 +53,15 @@ Deno.serve(async (req) => {
       }
     }
 
-    // K2-Think v2 vision analysis (extract + score) runs first.
-    // Dedalus runs in parallel using 'Unknown' as placeholder —
-    // we replace it with the extracted brand once K2 responds.
-    const k2Promise = analyzeTagWithK2Vision(imageUrl)
+    // K2-Think v2 vision (with one retry on parse failure)
+    const k2Result = await analyzeTagWithK2Vision(imageUrl)
 
-    // Both settle concurrently; Dedalus is re-called with real brand if needed.
-    const k2Result = await k2Promise
+    // Dedalus brand audit (certifications, brand rating)
     const dedalus = await fetchDedalusBrandAudit(k2Result.brand)
 
     const comparison = buildComparison(k2Result.score)
 
-    // Persist scan (best-effort, don't await)
+    // Persist scan — best-effort
     const supabase = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
@@ -139,44 +134,107 @@ type K2VisionResult = TagExtraction & {
   reasoning: string
 }
 
-// ─── K2-Think v2 vision: extract tag + score in one call ─────
+// ─── K2-Think v2 vision ───────────────────────────────────────
 
-const K2_SYSTEM_PROMPT = `You are a sustainable fashion expert with vision capabilities. When shown a clothing tag or care label image:
+// Primary prompt: full extraction + scoring
+const K2_SYSTEM_PROMPT = `You are a sustainable fashion expert with vision capabilities. Analyze clothing tag and care label images to extract product data and score environmental sustainability.
 
-1. Extract all visible text and data from the tag
-2. Score the garment's sustainability (0–100) based on materials, brand, and origin
+## Extraction rules
+
+**Brand:**
+- Read directly from the tag. If a logo is visible but text is unclear, describe it as best you can.
+- US garments often have an RN (Registered Number) or WPL number — note it in rawText but leave brand as the readable brand name.
+- Non-English tags: translate brand name if visible, note original language in rawText.
+- If truly not visible: "Unknown"
+
+**Materials:**
+- List every fiber with its percentage. Percentages MUST sum to exactly 100.
+- If the tag shows e.g. "60% Cotton, 40% Polyester" output [{"name":"Cotton","percentage":60},{"name":"Polyester","percentage":40}].
+- If total doesn't add to 100 (e.g. shell + lining listed separately), normalize the primary composition to 100.
+- Normalize ALL fiber names:
+  - POLY / POLYESTER → Polyester
+  - REC. POLY / RECYCLED POLYESTER → Recycled Polyester
+  - NYLON / POLYAMIDE → Nylon
+  - REC. NYLON → Recycled Nylon
+  - COTTON / COTON / ALGODÓN → Cotton
+  - ORG. COTTON / ORGANIC COTTON → Organic Cotton
+  - WOOL / LAINE / LANA → Wool
+  - LYOCELL / TENCEL → Tencel/Lyocell
+  - VISCOSE / RAYON → Viscose
+  - ELASTANE / SPANDEX / LYCRA → Elastane
+  - ACRYLIC → Acrylic
+  - SILK / SOIE → Silk
+  - LINEN / LIN → Linen
+  - HEMP / CHANVRE → Hemp
+- If no material info is visible: []
+
+**Country of origin:**
+- "MADE IN ___", "FABRIQUÉ EN ___", "HECHO EN ___" → extract the country.
+- If not visible: null
+
+**Care instructions:**
+- Translate care symbols to plain English (e.g. tub icon = "Machine wash", X over tub = "Do not wash").
+- Include temperature if visible.
+
+**rawText:** Transcribe ALL text visible on the tag exactly as shown.
+
+## Sustainability scoring (0–100)
 
 Scoring guide:
-- 70–100: Highly sustainable (recycled/organic/natural fibers, ethical brand, certifications)
+- 70–100: Highly sustainable
 - 40–69: Moderately sustainable
-- 0–39: Low sustainability (virgin synthetics, fast fashion)
+- 0–39: Low sustainability
 
-Material scoring signals:
-- Recycled Polyester / Recycled Nylon: strong positive (+15 vs virgin equivalent)
-- Organic Cotton, Tencel/Lyocell, Hemp, Linen: highly sustainable
-- Conventional Cotton: moderate (water-intensive cultivation)
-- Virgin Polyester, Nylon, Acrylic, Spandex: low sustainability
-- Wool, Silk: moderate (natural but resource-intensive)
+Material signals:
+- Recycled Polyester / Recycled Nylon: +15 vs virgin
+- Organic Cotton, Tencel/Lyocell, Hemp, Linen: score 70+
+- Conventional Cotton: moderate (50–60 baseline)
+- Virgin Polyester, Nylon, Acrylic: score 20–40
+- Elastane/Spandex blends: reduce score (prevents recycling)
+- Wool, Silk: moderate 45–65 (natural but resource-intensive)
+- Mixed recycled + conventional: interpolate
 
-After your step-by-step reasoning, output exactly one JSON object on its own line:
-{
-  "brand": "<brand name or 'Unknown'>",
-  "materials": [{"name": "<normalized fiber name>", "percentage": <0-100>}],
-  "countryOfOrigin": "<country or null>",
-  "careInstructions": ["<instruction>"],
-  "rawText": "<all visible text on the tag>",
-  "score": <0-100>,
-  "explanation": "<one-sentence summary for a product card>",
-  "reasoning": "<2-3 sentence detail explaining the score>"
-}
+Brand signals:
+- Known ethical brands (Patagonia, Eileen Fisher, Stella McCartney, Veja, Allbirds, etc.): +10
+- Known fast-fashion brands (Shein, Zara, H&M, etc.): −10
+- Unknown brand: neutral
 
-Normalize fiber names: e.g. "POLY" → "Polyester", "REC. POLY" → "Recycled Polyester", "ORG. COTTON" → "Organic Cotton".
-Percentages in materials must sum to 100.`
+Origin signals:
+- Made in Portugal, Italy, USA, Canada: slight positive (higher labour standards)
+- Made in Bangladesh, Cambodia, Vietnam: neutral (common, not inherently bad)
+- No origin listed: slight negative
+
+## Output format
+
+Reason step by step, then output EXACTLY ONE JSON object on its own line (no trailing commas, valid JSON):
+{"brand":"<string>","materials":[{"name":"<string>","percentage":<number>}],"countryOfOrigin":<string|null>,"careInstructions":["<string>"],"rawText":"<string>","score":<number>,"explanation":"<one sentence>","reasoning":"<2-3 sentences>"}`
+
+// Retry prompt: used when the primary response fails to parse
+const K2_RETRY_PROMPT = `Your previous response could not be parsed as JSON. Output ONLY the following JSON object with no other text, no markdown, no explanation:
+{"brand":"...","materials":[{"name":"...","percentage":0}],"countryOfOrigin":null,"careInstructions":[],"rawText":"...","score":0,"explanation":"...","reasoning":"..."}`
 
 async function analyzeTagWithK2Vision(imageUrl: string): Promise<K2VisionResult> {
   const endpoint = Deno.env.get('IFM_API_URL')
-  if (!endpoint) return visionFallback()
+  if (!endpoint) return visionFallback('No IFM_API_URL configured')
 
+  // Attempt 1 — full prompt
+  const attempt1 = await callK2Vision(endpoint, imageUrl, K2_SYSTEM_PROMPT)
+  if (attempt1) return normalizeMaterials(attempt1)
+
+  // Attempt 2 — retry prompt (asks model to output clean JSON only)
+  console.warn('[K2v2] Attempt 1 parse failed — retrying with simplified prompt')
+  const attempt2 = await callK2Vision(endpoint, imageUrl, K2_RETRY_PROMPT)
+  if (attempt2) return normalizeMaterials(attempt2)
+
+  console.warn('[K2v2] Both attempts failed — using fallback')
+  return visionFallback('K2-Think v2 did not return parseable JSON after 2 attempts')
+}
+
+async function callK2Vision(
+  endpoint: string,
+  imageUrl: string,
+  systemPrompt: string,
+): Promise<K2VisionResult | null> {
   try {
     const res = await fetch(endpoint, {
       method: 'POST',
@@ -187,51 +245,74 @@ async function analyzeTagWithK2Vision(imageUrl: string): Promise<K2VisionResult>
       body: JSON.stringify({
         model: K2_V2_MODEL_ID,
         messages: [
-          { role: 'system', content: K2_SYSTEM_PROMPT },
+          { role: 'system', content: systemPrompt },
           {
             role: 'user',
             content: [
               { type: 'image_url', image_url: { url: imageUrl } },
-              { type: 'text', text: 'Analyze this clothing tag and score its sustainability.' },
+              { type: 'text', text: 'Analyze this clothing tag.' },
             ],
           },
         ],
         max_tokens: 2048,
-        temperature: 0.3,
+        temperature: 0.2,
       }),
     })
 
     if (!res.ok) {
-      console.warn(`[K2v2] ${res.status} — using fallback`)
-      return visionFallback()
+      console.warn(`[K2v2] HTTP ${res.status}`)
+      return null
     }
 
     const data = await res.json()
     const content: string = data.choices?.[0]?.message?.content ?? ''
-    if (!content) return visionFallback()
+    if (!content) return null
 
-    // K2-Think emits chain-of-thought before the JSON verdict — grab the last match
-    const matches = content.match(/\{[\s\S]*?"score"[\s\S]*?\}/g)
-    if (!matches) return visionFallback()
+    const parsed = extractLastJson(content)
+    if (!parsed || typeof parsed.score !== 'number') return null
 
-    const parsed = JSON.parse(matches[matches.length - 1])
     return {
-      brand: parsed.brand ?? 'Unknown',
+      brand: String(parsed.brand ?? 'Unknown'),
       materials: (parsed.materials ?? []) as MaterialComponent[],
-      countryOfOrigin: parsed.countryOfOrigin ?? null,
-      careInstructions: parsed.careInstructions ?? [],
-      rawText: parsed.rawText ?? '',
-      score: parsed.score ?? 50,
-      explanation: parsed.explanation ?? 'Score estimated from fabric composition.',
-      reasoning: parsed.reasoning ?? parsed.explanation ?? '',
+      countryOfOrigin: parsed.countryOfOrigin ? String(parsed.countryOfOrigin) : null,
+      careInstructions: (parsed.careInstructions ?? []) as string[],
+      rawText: String(parsed.rawText ?? ''),
+      score: Math.round(Math.max(0, Math.min(100, Number(parsed.score)))),
+      explanation: String(parsed.explanation ?? 'Score estimated from fabric composition.'),
+      reasoning: String(parsed.reasoning ?? parsed.explanation ?? ''),
     }
   } catch (err) {
-    console.warn('[K2v2] error:', err)
-    return visionFallback()
+    console.warn('[K2v2] callK2Vision error:', err)
+    return null
   }
 }
 
-function visionFallback(): K2VisionResult {
+// Normalize material percentages to sum to exactly 100
+function normalizeMaterials(result: K2VisionResult): K2VisionResult {
+  const materials = result.materials
+  if (materials.length === 0) return result
+
+  const total = materials.reduce((sum, m) => sum + m.percentage, 0)
+  if (total === 0) return result
+  if (Math.abs(total - 100) <= 1) return result  // close enough
+
+  const normalized = materials.map((m) => ({
+    name: m.name,
+    percentage: Math.round((m.percentage / total) * 100),
+  }))
+
+  // Fix rounding drift: add/subtract from the largest component
+  const drift = 100 - normalized.reduce((sum, m) => sum + m.percentage, 0)
+  if (drift !== 0) {
+    const largest = normalized.reduce((max, m, i, arr) => m.percentage > arr[max].percentage ? i : max, 0)
+    normalized[largest].percentage += drift
+  }
+
+  return { ...result, materials: normalized }
+}
+
+function visionFallback(reason = ''): K2VisionResult {
+  if (reason) console.warn('[K2v2] fallback:', reason)
   return {
     brand: 'Unknown',
     materials: [],
@@ -239,12 +320,53 @@ function visionFallback(): K2VisionResult {
     careInstructions: [],
     rawText: '',
     score: 50,
-    explanation: 'Could not analyze tag — live K2-Think v2 scoring unavailable.',
-    reasoning: 'K2-Think v2 endpoint unreachable; score is a neutral fallback.',
+    explanation: 'Tag could not be analyzed — score is a neutral estimate.',
+    reasoning: reason || 'K2-Think v2 unavailable.',
   }
 }
 
-// ─── Dedalus Labs — brand audit (certifications) ─────────────
+// ─── JSON extraction ─────────────────────────────────────────
+// K2-Think emits chain-of-thought before the final JSON verdict.
+// Handles: code fences, bare JSON, deeply nested objects.
+
+function extractLastJson(text: string): Record<string, unknown> | null {
+  // 1. Try ```json ... ``` code fence
+  const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/)
+  if (fenceMatch) {
+    try {
+      const obj = JSON.parse(fenceMatch[1].trim())
+      if (obj && typeof obj === 'object') return obj
+    } catch {}
+  }
+
+  // 2. Scan backwards: find the last top-level { } block
+  let depth = 0
+  let end = -1
+  for (let i = text.length - 1; i >= 0; i--) {
+    const ch = text[i]
+    if (ch === '}') {
+      depth++
+      if (end === -1) end = i
+    } else if (ch === '{') {
+      depth--
+      if (depth === 0 && end !== -1) {
+        const candidate = text.slice(i, end + 1)
+        try {
+          const obj = JSON.parse(candidate)
+          if (obj && typeof obj === 'object') return obj
+        } catch {
+          // This slice wasn't valid JSON — keep scanning for an earlier {
+          end = -1
+          depth = 0
+        }
+      }
+    }
+  }
+
+  return null
+}
+
+// ─── Dedalus Labs ────────────────────────────────────────────
 
 type DedalusResult = { brand_rating: string; certifications: string[]; notes: string }
 
@@ -266,6 +388,19 @@ async function fetchDedalusBrandAudit(brand: string): Promise<DedalusResult> {
   } catch {
     return fallback
   }
+}
+
+// ─── Twilio helpers ───────────────────────────────────────────
+
+// Pick the first image/video attachment from Twilio's multi-media payload
+function pickImageUrl(form: FormData, numMedia: number): string {
+  for (let i = 0; i < Math.min(numMedia, 10); i++) {
+    const mime = form.get(`MediaContentType${i}`) as string | null
+    const url  = form.get(`MediaUrl${i}`) as string | null
+    if (url && mime?.startsWith('image/')) return url
+  }
+  // Fallback: return first URL regardless of content type
+  return form.get('MediaUrl0') as string ?? ''
 }
 
 // ─── Helpers ─────────────────────────────────────────────────
