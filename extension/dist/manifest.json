@@ -15,11 +15,18 @@
   "content_scripts": [
     {
       "js": [
-        "assets/content-script.ts-BQoEJjEu.js"
+        "assets/content-script.ts-BV-uMlyQ.js"
       ],
       "matches": [
         "https://*.depop.com/*",
         "https://*.vinted.com/*",
+        "https://*.vinted.co.uk/*",
+        "https://*.vinted.fr/*",
+        "https://*.vinted.de/*",
+        "https://*.vinted.it/*",
+        "https://*.vinted.es/*",
+        "https://*.vinted.nl/*",
+        "https://*.vinted.pl/*",
         "https://*.ebay.com/*",
         "https://*.thredup.com/*",
         "https://*.vestiairecollective.com/*",
@@ -62,13 +69,20 @@
         "https://*.thredup.com/*",
         "https://*.urbanoutfitters.com/*",
         "https://*.vestiairecollective.com/*",
+        "https://*.vinted.co.uk/*",
         "https://*.vinted.com/*",
+        "https://*.vinted.de/*",
+        "https://*.vinted.es/*",
+        "https://*.vinted.fr/*",
+        "https://*.vinted.it/*",
+        "https://*.vinted.nl/*",
+        "https://*.vinted.pl/*",
         "https://*.whatnot.com/*",
         "https://*.zara.com/*"
       ],
       "resources": [
-        "assets/content-script.ts-BQoEJjEu.js",
-        "assets/content-script.ts-BQoEJjEu.js.map"
+        "assets/content-script.ts-BV-uMlyQ.js",
+        "assets/content-script.ts-BV-uMlyQ.js.map"
       ],
       "use_dynamic_url": false
     }
