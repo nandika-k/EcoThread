@@ -8,7 +8,7 @@ export async function calculateSustainability(productId: string): Promise<Sustai
   const product = await db.Product.findUnique({ where: { id: productId } })
   if (!product) throw new Error(`Product not found: ${productId}`)
 
-  // Return cached score if already computed
+  // Return cached score if already computed.
   if (product.sustainability_score !== null && product.score_explanation !== null) {
     return {
       score: product.sustainability_score,
@@ -18,10 +18,10 @@ export async function calculateSustainability(productId: string): Promise<Sustai
     }
   }
 
-  // Step 1 — Dedalus Labs: real-time brand sustainability audit
+  // Step 1 - Dedalus Labs: real-time brand sustainability audit.
   const dedalus = await fetchDedalusBrandAudit(product.retailer, product.title)
 
-  // Step 2 — IFM (K2): reason over brand data and generate score
+  // Step 2 - IFM (K2): reason over brand data and generate score.
   const ifmResult = await fetchIFMScore({
     title: product.title,
     description: product.description ?? '',
@@ -32,7 +32,7 @@ export async function calculateSustainability(productId: string): Promise<Sustai
     brandNotes: dedalus.notes,
   })
 
-  // Step 3 — Persist result
+  // Step 3 - Persist result.
   await db.Product.update({
     where: { id: productId },
     data: {
@@ -48,8 +48,6 @@ export async function calculateSustainability(productId: string): Promise<Sustai
     comparison: buildComparison(ifmResult.score),
   }
 }
-
-// ─── Dedalus Labs ────────────────────────────────────────────
 
 type DedalusResult = {
   brand_rating: string
@@ -75,17 +73,16 @@ async function fetchDedalusBrandAudit(retailer: string, productTitle: string): P
   })
 
   if (!res.ok) {
-    // Graceful fallback — scoring continues without brand data
+    // Graceful fallback - scoring continues without brand data.
     return { brand_rating: 'unknown', certifications: [], notes: '' }
   }
 
   return res.json()
 }
 
-// ─── IFM K2-Think ────────────────────────────────────────────
 // Model: https://huggingface.co/LLM360/K2-Think
 // 32B reasoning model (Qwen2.5-32B base) with extended chain-of-thought.
-// Served via self-hosted vLLM (Modal/Runpod/Cerebras) — OpenAI-compatible.
+// Served via self-hosted vLLM (Modal/Runpod/Cerebras) - OpenAI-compatible.
 // Set IFM_API_URL to your vLLM /v1/chat/completions endpoint.
 
 const K2_MODEL_ID = 'LLM360/K2-Think'
@@ -110,7 +107,7 @@ async function fetchIFMScore(input: IFMInput): Promise<IFMOutput> {
   const apiKey = process.env.IFM_API_KEY
   const endpoint = process.env.IFM_API_URL
 
-  // No IFM endpoint configured — use retailer-based heuristic fallback
+  // No IFM endpoint configured - use retailer-based heuristic fallback.
   if (!endpoint) return retailerFallback(input)
 
   const secondhandContext = input.isSecondhand
@@ -156,14 +153,14 @@ Brand notes: ${input.brandNotes || 'none'}`
 
     if (!res.ok) {
       const body = await res.text().catch(() => '')
-      console.warn(`[IFM] K2-Think ${res.status}: ${body.slice(0, 200)} — using fallback`)
+      console.warn(`[IFM] K2-Think ${res.status}: ${body.slice(0, 200)} - using fallback`)
       return retailerFallback(input)
     }
 
     const data = await res.json()
     const content = data.choices?.[0]?.message?.content
     if (!content) {
-      console.warn('[IFM] K2-Think response missing content — using fallback')
+      console.warn('[IFM] K2-Think response missing content - using fallback')
       return retailerFallback(input)
     }
 
@@ -174,7 +171,7 @@ Brand notes: ${input.brandNotes || 'none'}`
       reasoning: parsed.reasoning ?? parsed.explanation,
     }
   } catch (err) {
-    console.warn('[IFM] K2-Think call errored — using fallback:', err)
+    console.warn('[IFM] K2-Think call errored - using fallback:', err)
     return retailerFallback(input)
   }
 }
@@ -184,8 +181,8 @@ function retailerFallback(input: IFMInput): IFMOutput {
   return {
     score,
     explanation: input.isSecondhand
-      ? 'Secondhand item — estimated sustainability based on reuse.'
-      : 'New retail item — estimated sustainability based on category.',
+      ? 'Secondhand item - estimated sustainability based on reuse.'
+      : 'New retail item - estimated sustainability based on category.',
     reasoning: 'Live K2-Think scoring unavailable; score estimated from retailer type.',
   }
 }
@@ -200,15 +197,13 @@ function extractTrailingJson(text: string): { score: number; explanation: string
   return JSON.parse(matches[matches.length - 1])
 }
 
-// ─── Helpers ─────────────────────────────────────────────────
-
 function extractBrand(title: string): string {
-  // Titles often start with brand: "Levi's 501 jeans" → "Levi's"
+  // Titles often start with brand: "Levi's 501 jeans" -> "Levi's".
   return title.split(' ')[0] ?? title
 }
 
 function buildComparison(score: number): string {
-  if (score >= 70) return `saves ~${Math.round(score * 0.3)} kg CO₂ vs buying new`
-  if (score >= 40) return `saves ~${Math.round(score * 0.15)} kg CO₂ vs buying new`
-  return 'minimal CO₂ savings vs buying new'
+  if (score >= 70) return `saves ~${Math.round(score * 0.3)} kg CO2 vs buying new`
+  if (score >= 40) return `saves ~${Math.round(score * 0.15)} kg CO2 vs buying new`
+  return 'minimal CO2 savings vs buying new'
 }

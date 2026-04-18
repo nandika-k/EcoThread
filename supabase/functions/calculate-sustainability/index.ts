@@ -14,7 +14,7 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const { productId } = await req.json()
+    const { productId, product: providedProduct } = await req.json()
 
     if (!productId) {
       return new Response(
@@ -30,20 +30,51 @@ Deno.serve(async (req) => {
     )
 
     // Get product
-    const { data: product, error: productError } = await supabase
+    const { data: existingProduct, error: productError } = await supabase
       .from('products')
       .select('*')
       .eq('id', productId)
       .maybeSingle()
 
-    if (productError || !product) {
+    if (productError) {
+      return new Response(
+        JSON.stringify({ error: getErrorMessage(productError) }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
+    let product = existingProduct
+
+    if (!product && providedProduct) {
+      const normalizedProduct = normalizeInputProduct(providedProduct, productId)
+      const { data: insertedProduct, error: insertError } = await supabase
+        .from('products')
+        .upsert({
+          ...normalizedProduct,
+          last_updated: new Date().toISOString(),
+          metadata: normalizedProduct.metadata ?? null,
+        })
+        .select('*')
+        .single()
+
+      if (insertError) {
+        return new Response(
+          JSON.stringify({ error: getErrorMessage(insertError) }),
+          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        )
+      }
+
+      product = insertedProduct
+    }
+
+    if (!product) {
       return new Response(
         JSON.stringify({ error: `Product not found: ${productId}` }),
         { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
 
-    // Return cached score if exists
+    // Return cached score if exists.
     if (product.sustainability_score !== null && product.score_explanation !== null) {
       return new Response(JSON.stringify({
         score: product.sustainability_score,
@@ -55,10 +86,10 @@ Deno.serve(async (req) => {
       })
     }
 
-    // Step 1: Dedalus brand audit
+    // Step 1: Dedalus brand audit.
     const dedalus = await fetchDedalusBrandAudit(product.retailer, product.title)
 
-    // Step 2: K2-Think scoring
+    // Step 2: K2-Think scoring.
     const ifmResult = await fetchIFMScore({
       title: product.title,
       description: product.description ?? '',
@@ -69,7 +100,7 @@ Deno.serve(async (req) => {
       brandNotes: dedalus.notes,
     })
 
-    // Step 3: Persist result
+    // Step 3: Persist result.
     await supabase
       .from('products')
       .update({
@@ -90,7 +121,7 @@ Deno.serve(async (req) => {
   } catch (error) {
     console.error('Error in calculate-sustainability:', error)
     return new Response(
-      JSON.stringify({ error: error.message }),
+      JSON.stringify({ error: getErrorMessage(error) }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
   }
@@ -130,7 +161,7 @@ async function fetchIFMScore(input: any): Promise<any> {
   const apiKey = Deno.env.get('IFM_API_KEY')
   const endpoint = Deno.env.get('IFM_API_URL')
 
-  // No IFM endpoint - use retailer heuristic
+  // No IFM endpoint - use retailer heuristic.
   if (!endpoint) return retailerFallback(input)
 
   const secondhandContext = input.isSecondhand
@@ -175,7 +206,7 @@ Brand notes: ${input.brandNotes || 'none'}`
 
     if (!res.ok) {
       const body = await res.text().catch(() => '')
-      console.warn(`[IFM] K2-Think ${res.status}: ${body.slice(0, 200)} — using fallback`)
+      console.warn(`[IFM] K2-Think ${res.status}: ${body.slice(0, 200)} - using fallback`)
       return retailerFallback(input)
     }
 
@@ -183,7 +214,7 @@ Brand notes: ${input.brandNotes || 'none'}`
     const content = data.choices?.[0]?.message?.content
 
     if (!content) {
-      console.warn('[IFM] K2-Think response missing content — using fallback')
+      console.warn('[IFM] K2-Think response missing content - using fallback')
       return retailerFallback(input)
     }
 
@@ -194,7 +225,7 @@ Brand notes: ${input.brandNotes || 'none'}`
       reasoning: parsed.reasoning ?? parsed.explanation,
     }
   } catch (err) {
-    console.warn('[IFM] K2-Think call errored — using fallback:', err)
+    console.warn('[IFM] K2-Think call errored - using fallback:', err)
     return retailerFallback(input)
   }
 }
@@ -204,9 +235,25 @@ function retailerFallback(input: any): any {
   return {
     score,
     explanation: input.isSecondhand
-      ? 'Secondhand item — estimated sustainability based on reuse.'
-      : 'New retail item — estimated sustainability based on category.',
+      ? 'Secondhand item - estimated sustainability based on reuse.'
+      : 'New retail item - estimated sustainability based on category.',
     reasoning: 'Live K2-Think scoring unavailable; score estimated from retailer type.',
+  }
+}
+
+function normalizeInputProduct(product: any, productId: string): any {
+  return {
+    id: productId,
+    retailer: product.retailer ?? 'unknown',
+    title: product.title ?? 'Untitled',
+    description: product.description ?? null,
+    price: product.price ?? null,
+    currency: product.currency ?? 'USD',
+    image_urls: Array.isArray(product.image_urls) ? product.image_urls : [],
+    product_url: product.product_url ?? '',
+    sustainability_score: product.sustainability_score ?? null,
+    score_explanation: product.score_explanation ?? null,
+    metadata: product.metadata ?? null,
   }
 }
 
@@ -223,7 +270,11 @@ function extractBrand(title: string): string {
 }
 
 function buildComparison(score: number): string {
-  if (score >= 70) return `saves ~${Math.round(score * 0.3)} kg CO₂ vs buying new`
-  if (score >= 40) return `saves ~${Math.round(score * 0.15)} kg CO₂ vs buying new`
-  return 'minimal CO₂ savings vs buying new'
+  if (score >= 70) return `saves ~${Math.round(score * 0.3)} kg CO2 vs buying new`
+  if (score >= 40) return `saves ~${Math.round(score * 0.15)} kg CO2 vs buying new`
+  return 'minimal CO2 savings vs buying new'
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : 'Unknown error'
 }

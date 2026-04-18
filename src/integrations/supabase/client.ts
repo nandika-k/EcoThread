@@ -3,16 +3,24 @@
 import { createClient } from '@supabase/supabase-js';
 import type { Database } from './types';
 
-const SUPABASE_URL = "https://spb-t4nkpp46996tv78k.supabase.opentrust.net";
-const SUPABASE_PUBLISHABLE_KEY = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoiYW5vbiIsInJlZiI6InNwYi10NG5rcHA0Njk5NnR2NzhrIiwiaXNzIjoic3VwYWJhc2UiLCJpYXQiOjE3NzY0NzU1NTEsImV4cCI6MjA5MjA1MTU1MX0.XNqAXgdDN46DFQpfa-kHK_WUQ6LvlMeQCP5qgllDnxk";
+const HOSTED_SUPABASE_URL = "https://spb-t4nkpp46996tv78k.supabase.opentrust.net";
+const HOSTED_SUPABASE_PUBLISHABLE_KEY = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoiYW5vbiIsInJlZiI6InNwYi10NG5rcHA0Njk5NnR2NzhrIiwiaXNzIjoic3VwYWJhc2UiLCJpYXQiOjE3NzY0NzU1NTEsImV4cCI6MjA5MjA1MTU1MX0.XNqAXgdDN46DFQpfa-kHK_WUQ6LvlMeQCP5qgllDnxk";
+const LOCAL_SUPABASE_URL = "http://127.0.0.1:54321";
+const LOCAL_SUPABASE_PUBLISHABLE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0";
+const isBrowser = typeof window !== 'undefined'
+const isLocalBrowser = isBrowser && ['127.0.0.1', 'localhost'].includes(window.location.hostname)
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL ?? (isLocalBrowser ? LOCAL_SUPABASE_URL : HOSTED_SUPABASE_URL)
+const SUPABASE_PUBLISHABLE_KEY =
+  import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY ??
+  (isLocalBrowser ? LOCAL_SUPABASE_PUBLISHABLE_KEY : HOSTED_SUPABASE_PUBLISHABLE_KEY)
 
 // Import the supabase client like this:
 // import { supabase } from "@/integrations/supabase/client";
 
 export const supabase = createClient<Database>(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
   auth: {
-    storage: localStorage,
-    persistSession: true,
-    autoRefreshToken: true,
+    storage: isBrowser ? window.localStorage : undefined,
+    persistSession: isBrowser,
+    autoRefreshToken: isBrowser,
   }
 });
