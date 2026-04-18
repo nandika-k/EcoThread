@@ -82,14 +82,13 @@ async function fetchDedalusBrandAudit(retailer: string, productTitle: string): P
   return res.json()
 }
 
-// ─── IFM K2-Think V2 ─────────────────────────────────────────
+// ─── IFM K2-Think ────────────────────────────────────────────
 // Model: https://huggingface.co/LLM360/K2-Think
 // 32B reasoning model (Qwen2.5-32B base) with extended chain-of-thought.
-// Served via Hugging Face Inference API by default; override with
-// IFM_API_URL env var to point at a self-hosted vLLM/Cerebras endpoint.
+// Served via self-hosted vLLM (Modal/Runpod/Cerebras) — OpenAI-compatible.
+// Set IFM_API_URL to your vLLM /v1/chat/completions endpoint.
 
 const K2_MODEL_ID = 'LLM360/K2-Think'
-const HF_INFERENCE_URL = `https://api-inference.huggingface.co/models/${K2_MODEL_ID}`
 
 type IFMInput = {
   title: string
@@ -109,7 +108,10 @@ type IFMOutput = {
 
 async function fetchIFMScore(input: IFMInput): Promise<IFMOutput> {
   const apiKey = process.env.IFM_API_KEY
-  const endpoint = process.env.IFM_API_URL ?? HF_INFERENCE_URL
+  const endpoint = process.env.IFM_API_URL
+
+  // No IFM endpoint configured — use retailer-based heuristic fallback
+  if (!endpoint) return retailerFallback(input)
 
   const secondhandContext = input.isSecondhand
     ? 'This item is sold on a secondhand marketplace, which significantly reduces its carbon footprint compared to buying new.'
@@ -133,44 +135,58 @@ Brand sustainability rating: ${input.brandRating}
 Certifications: ${input.certifications.join(', ') || 'none found'}
 Brand notes: ${input.brandNotes || 'none'}`
 
-  const res = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      inputs: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-      parameters: {
-        max_new_tokens: 2048,    // capped — K2-Think supports up to 32,768
-        temperature: 0.3,        // low variance for consistent scoring
-        return_full_text: false,
+  // OpenAI-compatible chat completions (vLLM-served K2-Think)
+  try {
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey ?? 'dummy'}`,
+        'Content-Type': 'application/json',
       },
-      options: { wait_for_model: true },   // handles HF cold-start
-    }),
-  })
+      body: JSON.stringify({
+        model: K2_MODEL_ID,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        max_tokens: 2048,
+        temperature: 0.3,
+      }),
+    })
 
-  if (!res.ok) {
-    // Fallback score for secondhand vs new — keeps demo flowing if API is down
-    const fallbackScore = input.isSecondhand ? 65 : 35
-    return {
-      score: fallbackScore,
-      explanation: 'Score estimated based on retailer type.',
-      reasoning: 'IFM scoring unavailable — using retailer-type fallback.',
+    if (!res.ok) {
+      const body = await res.text().catch(() => '')
+      console.warn(`[IFM] K2-Think ${res.status}: ${body.slice(0, 200)} — using fallback`)
+      return retailerFallback(input)
     }
+
+    const data = await res.json()
+    const content = data.choices?.[0]?.message?.content
+    if (!content) {
+      console.warn('[IFM] K2-Think response missing content — using fallback')
+      return retailerFallback(input)
+    }
+
+    const parsed = extractTrailingJson(content)
+    return {
+      score: parsed.score,
+      explanation: parsed.explanation,
+      reasoning: parsed.reasoning ?? parsed.explanation,
+    }
+  } catch (err) {
+    console.warn('[IFM] K2-Think call errored — using fallback:', err)
+    return retailerFallback(input)
   }
+}
 
-  const data = await res.json()
-  const generated = Array.isArray(data) ? data[0]?.generated_text : data.generated_text
-  const parsed = extractTrailingJson(generated ?? '')
-
+function retailerFallback(input: IFMInput): IFMOutput {
+  const score = input.isSecondhand ? 65 : 35
   return {
-    score: parsed.score,
-    explanation: parsed.explanation,
-    reasoning: parsed.reasoning ?? parsed.explanation,
+    score,
+    explanation: input.isSecondhand
+      ? 'Secondhand item — estimated sustainability based on reuse.'
+      : 'New retail item — estimated sustainability based on category.',
+    reasoning: 'Live K2-Think scoring unavailable; score estimated from retailer type.',
   }
 }
 
