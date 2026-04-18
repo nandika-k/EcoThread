@@ -37,7 +37,7 @@ Deno.serve(async (req) => {
       { auth: { persistSession: false } }
     )
 
-    const targets = retailers
+    const targets = retailers && retailers.length > 0
       ? RETAILERS.filter(r => retailers.includes(r.name))
       : RETAILERS
 
@@ -92,7 +92,7 @@ Deno.serve(async (req) => {
   } catch (error) {
     console.error('Error in aggregate-products:', error)
     return new Response(
-      JSON.stringify({ error: error.message }),
+      JSON.stringify({ error: getErrorMessage(error) }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
   }
@@ -143,4 +143,8 @@ function normalizeResult(item: any, retailer: string, index: number): any {
 function extractPrice(text: string): number {
   const match = text.match(/\$(\d+(?:\.\d{2})?)/);
   return match ? parseFloat(match[1]) : 0
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : 'Unknown error'
 }

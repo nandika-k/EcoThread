@@ -14,11 +14,11 @@ const CACHE_TTL_MS = 60 * 60 * 1000 // 1 hour
 /** @expose */
 export async function aggregateProducts(input: AggregateInput): Promise<Product[]> {
   const { query, retailers, page = 0 } = input
-  const targets = retailers
+  const targets = retailers && retailers.length > 0
     ? RETAILERS.filter(r => retailers.includes(r.name))
     : RETAILERS
 
-  // Check cache first — return fresh rows without re-fetching
+  // Check cache first and return fresh rows without re-fetching.
   const cacheThreshold = new Date(Date.now() - CACHE_TTL_MS).toISOString()
   const cached = await db.Product.findMany({
     where: {
@@ -31,7 +31,7 @@ export async function aggregateProducts(input: AggregateInput): Promise<Product[
 
   if (cached.length >= 10) return cached as Product[]
 
-  // Fetch from Tavily in parallel, one request per retailer
+  // Fetch from Tavily in parallel, one request per retailer.
   const tavilyKey = process.env.TAVILY_API_KEY
   const results = await Promise.allSettled(
     targets.map(retailer => fetchRetailer(query, retailer.domain, retailer.name, tavilyKey!))
@@ -44,7 +44,6 @@ export async function aggregateProducts(input: AggregateInput): Promise<Product[
   // Upsert into Product cache
   if (products.length > 0) {
     await db.Product.upsertMany(products.map(p => ({
-      id: p.id,
       ...p,
       last_updated: new Date().toISOString(),
     })))
@@ -90,6 +89,8 @@ function normalizeResult(item: any, retailer: string, index: number): Product {
     product_url: item.url ?? '',
     sustainability_score: null,
     score_explanation: null,
+    metadata: null,
+    last_updated: new Date().toISOString(),
   }
 }
 

@@ -56,7 +56,7 @@ const MOCK_PRODUCTS = [
     image_urls: ['https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=400'],
     product_url: 'https://depop.com/products/mock-004',
     sustainability_score: 75,
-    score_explanation: 'Cottagecore favorite — secondhand floral dress from indie seller.',
+    score_explanation: 'Cottagecore favorite - secondhand floral dress from indie seller.',
   },
 ]
 
@@ -67,15 +67,18 @@ Deno.serve(async (req) => {
 
   try {
     const authHeader = req.headers.get('Authorization')
-    const { page = 0 } = await req.json().catch(() => ({ page: 0 }))
+    const { page = 0, search = '', retailer = 'all' } = await req.json().catch(() => ({
+      page: 0,
+      search: '',
+      retailer: 'all',
+    }))
+    const globalHeaders = authHeader ? { Authorization: authHeader } : undefined
 
     const supabase = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_ANON_KEY') ?? '',
       {
-        global: {
-          headers: { Authorization: authHeader! },
-        },
+        global: globalHeaders ? { headers: globalHeaders } : undefined,
         auth: { persistSession: false }
       }
     )
@@ -84,22 +87,22 @@ Deno.serve(async (req) => {
     const { data: { user }, error: authError } = await supabase.auth.getUser()
     
     if (authError || !user) {
-      // Not authenticated - return generic recommendations
-      const query = DEFAULT_QUERY
-      const products = await fetchProducts(supabase, query, page)
+      // Not authenticated - return generic recommendations.
+      const query = buildQuery(null, search)
+      const products = await fetchProducts(supabase, query, page, search, retailer)
       return new Response(JSON.stringify(products), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       })
     }
 
-    // Get user profile and preferences
+    // Get user profile and preferences.
     const { data: profile } = await supabase
       .from('profiles')
       .select('id')
       .eq('user_id', user.id)
       .maybeSingle()
 
-    let query = DEFAULT_QUERY
+    let query = buildQuery(null, search)
 
     if (profile) {
       const { data: prefs } = await supabase
@@ -108,12 +111,10 @@ Deno.serve(async (req) => {
         .eq('profile_id', profile.id)
         .maybeSingle()
 
-      if (prefs && prefs.style_tags && prefs.style_tags.length > 0) {
-        query = buildQuery(prefs)
-      }
+      query = buildQuery(prefs, search)
     }
 
-    const products = await fetchProducts(supabase, query, page)
+    const products = await fetchProducts(supabase, query, page, search, retailer)
 
     return new Response(JSON.stringify(products), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }
@@ -122,40 +123,78 @@ Deno.serve(async (req) => {
   } catch (error) {
     console.error('Error in get-recommendations:', error)
     return new Response(
-      JSON.stringify({ error: error.message }),
+      JSON.stringify({ error: getErrorMessage(error) }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
   }
 })
 
-async function fetchProducts(supabase: any, query: string, page: number): Promise<any[]> {
+async function fetchProducts(
+  supabase: any,
+  query: string,
+  page: number,
+  search: string,
+  retailer: string,
+): Promise<any[]> {
+  const retailerFilter = retailer && retailer !== 'all' ? retailer : null
+
   try {
-    // Call aggregate-products function
+    // Call aggregate-products function.
     const { data, error } = await supabase.functions.invoke('aggregate-products', {
-      body: { query, page }
+      body: {
+        query,
+        page,
+        retailers: retailerFilter ? [retailerFilter] : undefined,
+      }
     })
 
     if (error) throw error
-    if (data && data.length > 0) return data
+    if (data && data.length > 0) return filterProducts(data, search, retailerFilter)
 
-    // Empty result - fall back to mock
-    return mockPage(page)
+    // Empty result - fall back to mock.
+    return mockPage(page, search, retailerFilter)
   } catch (err) {
     console.warn('[getRecommendations] Tavily failed, falling back to mock:', err)
-    return mockPage(page)
+    return mockPage(page, search, retailerFilter)
   }
 }
 
-function buildQuery(prefs: { style_tags: string[]; occasions: string[] }): string {
-  if (!prefs.style_tags || prefs.style_tags.length === 0) return DEFAULT_QUERY
+function buildQuery(
+  prefs: { style_tags: string[] | null; occasions: string[] | null } | null,
+  search: string,
+): string {
   const parts = [
-    ...prefs.style_tags,
-    ...(prefs.occasions || []).map(o => `${o} outfit`),
-    'secondhand vintage clothing',
-  ]
-  return parts.slice(0, 4).join(' ')
+    search.trim(),
+    ...(prefs?.style_tags ?? []),
+    ...(prefs?.occasions ?? []).map(o => `${o} outfit`),
+    DEFAULT_QUERY,
+  ].filter(Boolean)
+
+  return parts.slice(0, 5).join(' ')
 }
 
-function mockPage(page: number): any[] {
-  return MOCK_PRODUCTS.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
+function mockPage(page: number, search: string, retailer: string | null): any[] {
+  const filtered = filterProducts(MOCK_PRODUCTS, search, retailer)
+  return filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
+}
+
+function filterProducts(products: any[], search: string, retailer: string | null): any[] {
+  const normalizedSearch = search.trim().toLowerCase()
+
+  return products.filter((product) => {
+    if (retailer && product.retailer !== retailer) {
+      return false
+    }
+
+    if (!normalizedSearch) {
+      return true
+    }
+
+    const haystack = `${product.title ?? ''} ${product.description ?? ''} ${product.retailer ?? ''}`.toLowerCase()
+    return haystack.includes(normalizedSearch)
+  })
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : 'Unknown error'
 }
