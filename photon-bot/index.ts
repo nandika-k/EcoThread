@@ -4,7 +4,7 @@
 //
 // Run: bun run index.ts
 
-import { Spectrum, text, responding } from 'spectrum-ts'
+import { Spectrum, text } from 'spectrum-ts'
 import { imessage } from 'spectrum-ts/providers/imessage'
 
 const PHOTON_PROJECT_ID     = process.env.PHOTON_PROJECT_ID!
@@ -31,11 +31,8 @@ for await (const [space, message] of app.messages) {
   const content = message.content
 
   if (content.type === 'attachment' && content.mimeType?.startsWith('image/')) {
-    // Show typing indicator while K2-Think v2 processes
-    await space.send(responding())
-
     try {
-      const result = await callAnalyzeTag(content.url, message.sender.id)
+      const result = await space.responding(() => callAnalyzeTag(content.url, message.sender.id))
       await space.send(text(result.formattedReply))
     } catch (err) {
       console.error('[Bot] analyze-tag error:', err)
@@ -62,9 +59,8 @@ for await (const [space, message] of app.messages) {
         ),
       )
     } else {
-      await space.send(responding())
       try {
-        const result = await callAnalyzeText(rawBody, message.sender.id)
+        const result = await space.responding(() => callAnalyzeText(rawBody, message.sender.id))
         await space.send(text(result.formattedReply))
       } catch (err) {
         console.error('[Bot] analyze-text error:', err)
