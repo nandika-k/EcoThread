@@ -1,8 +1,9 @@
 import {
   buildRetailerSearchQuery,
+  extractListingPrice,
   filterValidatedListings,
   normalizeListingCandidate,
-  normalizeListingPrice,
+  normalizeListingImageUrls,
 } from './lib/listingValidation'
 import type { AggregateInput, Product } from './types/product'
 
@@ -80,6 +81,8 @@ async function fetchRetailer(
     body: JSON.stringify({
       api_key: apiKey,
       query: buildRetailerSearchQuery(query, retailerName, domain),
+      include_domains: [domain],
+      include_raw_content: 'text',
       search_depth: 'basic',
       include_images: true,
       max_results: 20,
@@ -101,18 +104,26 @@ function normalizeResult(
   retailer: string,
   index: number,
 ): Product | null {
+  const title = typeof item.title === 'string' ? item.title : 'Untitled'
+  const description = typeof item.content === 'string' ? item.content : ''
+  const rawContent = typeof item.raw_content === 'string' ? item.raw_content : ''
+  const extractedPrice = extractListingPrice(title, description, rawContent)
   const externalId = encodeURIComponent(String(item.url ?? `${retailer}-${index}`))
+
   return normalizeListingCandidate<Product>(
     {
       id: `${retailer}:${externalId}`,
       retailer,
-      title: typeof item.title === 'string' ? item.title : 'Untitled',
-      description: typeof item.content === 'string' ? item.content : '',
-      price: extractPrice(typeof item.content === 'string' ? item.content : ''),
-      currency: 'USD',
-      image_urls: Array.isArray(item.images)
-        ? item.images.filter((image): image is string => typeof image === 'string')
-        : [],
+      title,
+      description,
+      price: extractedPrice.price,
+      currency: extractedPrice.currency,
+      image_urls: normalizeListingImageUrls(
+        Array.isArray(item.images)
+          ? item.images.filter((image): image is string => typeof image === 'string')
+          : [],
+        retailer,
+      ),
       product_url: typeof item.url === 'string' ? item.url : '',
       sustainability_score: null,
       score_explanation: null,
@@ -232,9 +243,4 @@ function chunked<T>(values: T[], size: number): T[][] {
   }
 
   return chunks
-}
-
-function extractPrice(text: string): number | null {
-  const match = text.match(/\$(\d+(?:\.\d{2})?)/)
-  return normalizeListingPrice(match ? parseFloat(match[1]) : null)
 }

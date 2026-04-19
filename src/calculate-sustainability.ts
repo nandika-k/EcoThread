@@ -9,13 +9,18 @@ export async function calculateSustainability(productId: string): Promise<Sustai
   if (!product) throw new Error(`Product not found: ${productId}`)
 
   // Return cached score if already computed.
-  if (product.sustainability_score !== null && product.score_explanation !== null) {
+  if (
+    product.sustainability_score !== null &&
+    product.score_explanation !== null &&
+    !isFallbackScore(product.score_explanation)
+  ) {
     const score = product.sustainability_score
     const text = (product.title + ' ' + (product.description ?? '')).toLowerCase()
+    const metadata = getProductMetadata(product.metadata)
     return {
       score,
       explanation: product.score_explanation,
-      reasoning: product.score_explanation,
+      reasoning: metadata.scoring_reasoning ?? product.score_explanation,
       comparison: buildComparison(score),
       carbon_kg: carbonKg(score),
       fabric_type: extractFabric(text),
@@ -41,8 +46,17 @@ export async function calculateSustainability(productId: string): Promise<Sustai
   await db.Product.update({
     where: { id: productId },
     data: {
-      sustainability_score: ifmResult.score,
-      score_explanation: ifmResult.explanation,
+      sustainability_score: ifmResult.source === 'live' ? ifmResult.score : product.sustainability_score,
+      score_explanation: ifmResult.source === 'live' ? ifmResult.explanation : product.score_explanation,
+      metadata: ifmResult.source === 'live'
+        ? {
+            ...getProductMetadata(product.metadata),
+            scoring_model: K2_MODEL_ID,
+            scoring_reasoning: ifmResult.reasoning,
+            scoring_source: 'live',
+            scored_at: new Date().toISOString(),
+          }
+        : product.metadata,
     },
   })
 
@@ -111,6 +125,7 @@ type IFMOutput = {
   score: number
   explanation: string
   reasoning: string
+  source: 'fallback' | 'live'
 }
 
 async function fetchIFMScore(input: IFMInput): Promise<IFMOutput> {
@@ -179,6 +194,7 @@ Brand notes: ${input.brandNotes || 'none'}`
       score: parsed.score,
       explanation: parsed.explanation,
       reasoning: parsed.reasoning ?? parsed.explanation,
+      source: 'live',
     }
   } catch (err) {
     console.warn('[IFM] K2-Think call errored - using fallback:', err)
@@ -194,6 +210,7 @@ function retailerFallback(input: IFMInput): IFMOutput {
       ? 'Secondhand item - estimated sustainability based on reuse.'
       : 'New retail item - estimated sustainability based on category.',
     reasoning: 'Live K2-Think scoring unavailable; score estimated from retailer type.',
+    source: 'fallback',
   }
 }
 
@@ -239,4 +256,17 @@ function extractCondition(text: string): string | null {
   if (t.includes('good') || t.includes('great')) return 'Good'
   if (t.includes('fair') || t.includes('worn') || t.includes('used')) return 'Fair'
   return 'Good'
+}
+
+function getProductMetadata(metadata: unknown): Record<string, unknown> {
+  return typeof metadata === 'object' && metadata !== null && !Array.isArray(metadata)
+    ? metadata as Record<string, unknown>
+    : {}
+}
+
+function isFallbackScore(explanation: string): boolean {
+  const normalized = explanation.toLowerCase()
+  return normalized.includes('estimated sustainability') ||
+    normalized.includes('score estimated from retailer type') ||
+    normalized.includes('live k2-think scoring unavailable')
 }

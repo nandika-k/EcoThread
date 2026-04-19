@@ -75,12 +75,17 @@ Deno.serve(async (req) => {
     }
 
     // Return cached score if exists.
-    if (product.sustainability_score !== null && product.score_explanation !== null) {
+    if (
+      product.sustainability_score !== null &&
+      product.score_explanation !== null &&
+      !isFallbackScore(product.score_explanation)
+    ) {
       const score = product.sustainability_score
+      const metadata = getProductMetadata(product.metadata)
       return new Response(JSON.stringify({
         score,
         explanation: product.score_explanation,
-        reasoning: product.score_explanation,
+        reasoning: metadata.scoring_reasoning ?? product.score_explanation,
         comparison: buildComparison(score),
         carbon_kg: carbonKg(score),
         fabric_type: extractFabric(product.title + ' ' + (product.description ?? '')),
@@ -105,13 +110,22 @@ Deno.serve(async (req) => {
     })
 
     // Step 3: Persist result.
-    await supabase
-      .from('products')
-      .update({
-        sustainability_score: ifmResult.score,
-        score_explanation: ifmResult.explanation,
-      })
-      .eq('id', productId)
+    if (ifmResult.source === 'live') {
+      await supabase
+        .from('products')
+        .update({
+          sustainability_score: ifmResult.score,
+          score_explanation: ifmResult.explanation,
+          metadata: {
+            ...getProductMetadata(product.metadata),
+            scoring_model: K2_MODEL_ID,
+            scoring_reasoning: ifmResult.reasoning,
+            scoring_source: 'live',
+            scored_at: new Date().toISOString(),
+          },
+        })
+        .eq('id', productId)
+    }
 
     const score = ifmResult.score
     return new Response(JSON.stringify({
@@ -231,6 +245,7 @@ Brand notes: ${input.brandNotes || 'none'}`
       score: parsed.score,
       explanation: parsed.explanation,
       reasoning: parsed.reasoning ?? parsed.explanation,
+      source: 'live',
     }
   } catch (err) {
     console.warn('[IFM] K2-Think call errored - using fallback:', err)
@@ -246,6 +261,7 @@ function retailerFallback(input: any): any {
       ? 'Secondhand item — estimated sustainability based on reuse.'
       : 'New retail item — estimated sustainability based on category.',
     reasoning: 'Live K2-Think scoring unavailable; score estimated from retailer type.',
+    source: 'fallback',
     fabric_type: extractFabric(input.title + ' ' + input.description),
     condition: extractCondition(input.description),
   }
@@ -311,4 +327,17 @@ function extractCondition(text: string): string | null {
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Unknown error'
+}
+
+function getProductMetadata(metadata: unknown): Record<string, unknown> {
+  return typeof metadata === 'object' && metadata !== null && !Array.isArray(metadata)
+    ? metadata as Record<string, unknown>
+    : {}
+}
+
+function isFallbackScore(explanation: string): boolean {
+  const normalized = explanation.toLowerCase()
+  return normalized.includes('estimated sustainability') ||
+    normalized.includes('score estimated from retailer type') ||
+    normalized.includes('live k2-think scoring unavailable')
 }

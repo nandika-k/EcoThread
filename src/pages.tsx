@@ -1,6 +1,7 @@
 import {
   useMutation,
   useQuery,
+  useQueries,
   useQueryClient,
 } from '@tanstack/react-query'
 import { useDeferredValue, useEffect, useState } from 'react'
@@ -10,6 +11,7 @@ import { Component as GlowBackground } from './components/ui/background-componen
 import {
   addPinToBoard,
   createBoardLocal,
+  FEED_PAGE_SIZE,
   getBoard,
   getDemoCredentials,
   getPinnedProductIds,
@@ -23,7 +25,7 @@ import {
   upsertStylePreference,
 } from './lib/rewear-store'
 import { OCCASIONS, STYLE_TAGS } from './types/profile'
-import type { Product } from './types/product'
+import type { Product, SustainabilityResult } from './types/product'
 import {
   BoardCard,
   BoardSelectorModal,
@@ -357,6 +359,22 @@ export function FeedPage(): JSX.Element {
 
   const products = feedQuery.data?.pages.flatMap((page) => page) ?? []
   const pinnedIds = new Set(pinnedIdsQuery.data ?? [])
+  const visibleProducts = products.slice(0, FEED_PAGE_SIZE)
+  const scoreQueries = useQueries({
+    queries: visibleProducts.map((product) => ({
+      queryKey: ['feed-score', product.id, product.last_updated],
+      queryFn: () => getSustainabilityLocal(product),
+      staleTime: 5 * 60_000,
+    })),
+  })
+  const scoreMap = new Map<string, SustainabilityResult>()
+
+  for (const [index, product] of visibleProducts.entries()) {
+    const result = scoreQueries[index]?.data
+    if (product && result) {
+      scoreMap.set(product.id, result)
+    }
+  }
 
   return (
     <div>
@@ -398,13 +416,15 @@ export function FeedPage(): JSX.Element {
       ) : (
         <>
           <MasonryGrid>
-            {products.map((product) => (
+            {products.map((product, index) => (
               <ProductCard
                 key={product.id}
                 onOpen={() => setSelectedProduct(product)}
                 onSave={() => setSavingProduct(product)}
                 pinned={pinnedIds.has(product.id)}
                 product={product}
+                sustainabilityLoading={scoreQueries[index]?.isLoading ?? false}
+                sustainabilityResult={scoreMap.get(product.id) ?? null}
               />
             ))}
           </MasonryGrid>

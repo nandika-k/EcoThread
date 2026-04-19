@@ -6,6 +6,8 @@ import type { Product, SustainabilityResult } from '../types/product'
 type ProductCardProps = {
   product: Product
   pinned?: boolean
+  sustainabilityResult?: SustainabilityResult | null
+  sustainabilityLoading?: boolean
   onOpen: () => void
   onSave: () => void
   secondaryAction?: {
@@ -46,11 +48,18 @@ export function MasonryGrid({ children }: { children: ReactNode }): JSX.Element 
 export function ProductCard({
   product,
   pinned = false,
+  sustainabilityResult = null,
+  sustainabilityLoading = false,
   onOpen,
   onSave,
   secondaryAction,
 }: ProductCardProps): JSX.Element {
   const primaryImage = product.image_urls?.[0] ?? null
+  const priceLabel = formatPrice(product.price, product.currency)
+  const score = sustainabilityResult?.score ?? product.sustainability_score ?? null
+  const isEstimatedScore = sustainabilityResult?.reasoning?.toLowerCase().includes('unavailable') ?? false
+  const scoreLabel = sustainabilityLoading ? 'K2…' : score != null ? `${isEstimatedScore ? 'EST ' : ''}${score}` : 'K2'
+  const scoreClass = score == null ? 'var(--forest-sage)' : score >= 70 ? 'var(--green)' : score >= 40 ? 'var(--amber)' : 'var(--red)'
 
   return (
     <article
@@ -69,6 +78,39 @@ export function ProductCard({
         )}
         <div className="pin-hover-overlay" style={{ pointerEvents: 'none' }}>
           <span className="pin-title">{product.title}</span>
+        </div>
+        <div
+          className="flex items-center justify-between gap-2"
+          style={{
+            position: 'absolute',
+            left: '0.75rem',
+            right: '0.75rem',
+            bottom: '0.75rem',
+            pointerEvents: 'none',
+          }}
+        >
+          <span
+            className="text-[10px] uppercase tracking-[0.16em]"
+            style={{
+              background: 'rgba(255,255,255,0.92)',
+              borderRadius: 999,
+              color: 'var(--deep-navy)',
+              padding: '0.35rem 0.55rem',
+            }}
+          >
+            {priceLabel}
+          </span>
+          <span
+            className="text-[10px] uppercase tracking-[0.16em]"
+            style={{
+              background: 'rgba(255,255,255,0.92)',
+              borderRadius: 999,
+              color: scoreClass,
+              padding: '0.35rem 0.55rem',
+            }}
+          >
+            {scoreLabel}
+          </span>
         </div>
         <button
           className={`pin-save-btn${pinned ? ' pin-save-btn-active' : ''}`}

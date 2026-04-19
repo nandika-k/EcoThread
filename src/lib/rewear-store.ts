@@ -1,6 +1,6 @@
 import { supabase } from '../integrations/supabase/client'
 import { MOCK_PRODUCTS } from './mockProducts'
-import { filterValidatedListings, normalizeListingPrice } from './listingValidation'
+import { extractListingPrice, filterValidatedListings, normalizeListingImageUrls, normalizeListingPrice } from './listingValidation'
 import type { Board, Pin } from '../types/board'
 import type { Product, SustainabilityResult } from '../types/product'
 import type { Profile, StylePreference } from '../types/profile'
@@ -112,12 +112,14 @@ function normalizeStylePreference(row: StylePreference | null): StylePreference 
 }
 
 function normalizeProduct(product: Product): Product {
+  const fallbackPrice = extractListingPrice(product.title, product.description)
+
   return {
     ...product,
     description: product.description ?? null,
-    price: normalizeListingPrice(product.price),
-    currency: product.currency ?? 'USD',
-    image_urls: product.image_urls ?? [],
+    price: normalizeListingPrice(product.price) ?? fallbackPrice.price,
+    currency: product.currency ?? fallbackPrice.currency ?? 'USD',
+    image_urls: normalizeListingImageUrls(product.image_urls, product.retailer ?? undefined),
     metadata: product.metadata ?? null,
     last_updated: product.last_updated ?? new Date().toISOString(),
   }
@@ -451,8 +453,10 @@ export async function getRecommendationsLocal(input: QueryInput): Promise<Produc
     retailer: input.retailer ?? 'all',
   })
 
-  return filterValidatedListings(data, input.search?.trim() ?? '', input.retailer ?? 'all')
-    .map((product) => normalizeProduct(product))
+  return rankFeedProducts(
+    filterValidatedListings(data, input.search?.trim() ?? '', input.retailer ?? 'all')
+      .map((product) => normalizeProduct(product)),
+  )
 }
 
 export async function getSustainabilityLocal(product: string | Product): Promise<SustainabilityResult> {
@@ -654,4 +658,35 @@ function extractCondition(text: string): string | null {
   if (t.includes('good') || t.includes('great')) return 'Good'
   if (t.includes('fair') || t.includes('worn') || t.includes('used')) return 'Fair'
   return 'Good'
+}
+
+function rankFeedProducts(products: Product[]): Product[] {
+  return products
+    .map((product, index) => ({
+      product,
+      index,
+      score: scoreFeedProduct(product),
+    }))
+    .sort((left, right) => right.score - left.score || left.index - right.index)
+    .map((entry) => entry.product)
+}
+
+function scoreFeedProduct(product: Product): number {
+  let score = 0
+
+  if ((product.image_urls?.length ?? 0) > 0) {
+    score += 60
+  }
+
+  if (product.price != null) {
+    score += 30
+  }
+
+  if (product.sustainability_score != null) {
+    score += 20
+  }
+
+  score += Math.min(product.image_urls?.length ?? 0, 3) * 5
+
+  return score
 }
