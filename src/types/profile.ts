@@ -1,18 +1,12 @@
-export type Profile = {
-  id: string
-  email: string
-  display_name: string | null
-  avatar_url: string | null
-  created_at: string
-}
+import type { Tables } from '../integrations/supabase/types'
 
-export type StylePreference = {
-  id: string
-  user_id: string
+type ProfileRow = Tables<'profiles'>
+type StylePreferenceRow = Tables<'style_preferences'>
+
+export type Profile = ProfileRow
+export type StylePreference = Omit<StylePreferenceRow, 'style_tags' | 'occasions'> & {
   style_tags: string[]
   occasions: string[]
-  style_text: string | null
-  created_at: string
 }
 
 export const STYLE_TAGS = [

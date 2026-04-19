@@ -1,12 +1,17 @@
-import type { AggregateInput, Product } from './types/product'
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.3'
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+}
 
 const RETAILERS = [
-  { name: 'depop',      domain: 'depop.com' },
-  { name: 'vinted',     domain: 'vinted.com' },
-  { name: 'ebay',       domain: 'ebay.com' },
-  { name: 'thredup',    domain: 'thredup.com' },
-  { name: 'vestiaire',  domain: 'vestiairecollective.com' },
-  { name: 'whatnot',    domain: 'whatnot.com' },
+  { name: 'depop', domain: 'depop.com' },
+  { name: 'vinted', domain: 'vinted.com' },
+  { name: 'ebay', domain: 'ebay.com' },
+  { name: 'thredup', domain: 'thredup.com' },
+  { name: 'vestiaire', domain: 'vestiairecollective.com' },
+  { name: 'whatnot', domain: 'whatnot.com' },
 ]
 
 const CACHE_TTL_MS = 60 * 60 * 1000 // 1 hour
@@ -41,53 +46,94 @@ const LISTING_PATH_HINTS: Record<string, string[]> = {
 
 const LISTING_QUERY_KEYS = ['id', 'item', 'itemid', 'listingid', 'object_id', 'sku']
 
-/** @expose */
-export async function aggregateProducts(input: AggregateInput): Promise<Product[]> {
-  const { query, retailers, page = 0 } = input
-  const targets = retailers && retailers.length > 0
-    ? RETAILERS.filter(r => retailers.includes(r.name))
-    : RETAILERS
-
-  // Check cache first and return fresh rows without re-fetching.
-  const cacheThreshold = new Date(Date.now() - CACHE_TTL_MS).toISOString()
-  const cached = await db.Product.findMany({
-    where: {
-      retailer: { in: targets.map(r => r.name) },
-      last_updated: { gte: cacheThreshold },
-    },
-    limit: 20,
-    offset: page * 20,
-  })
-
-  if (cached.length >= 10) return cached as Product[]
-
-  // Fetch from Tavily in parallel, one request per retailer.
-  const tavilyKey = process.env.TAVILY_API_KEY
-  const results = await Promise.allSettled(
-    targets.map(retailer => fetchRetailer(query, retailer.domain, retailer.name, tavilyKey!))
-  )
-
-  const products: Product[] = results
-    .filter((r): r is PromiseFulfilledResult<Product[]> => r.status === 'fulfilled')
-    .flatMap(r => r.value)
-
-  // Upsert into Product cache
-  if (products.length > 0) {
-    await db.Product.upsertMany(products.map(p => ({
-      ...p,
-      last_updated: new Date().toISOString(),
-    })))
+Deno.serve(async (req) => {
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { headers: corsHeaders })
   }
 
-  return products.slice(page * 20, (page + 1) * 20)
-}
+  try {
+    const { query, retailers, page = 0 } = await req.json()
+
+    if (!query) {
+      return new Response(
+        JSON.stringify({ error: 'Query parameter is required' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
+    const supabase = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
+      { auth: { persistSession: false } }
+    )
+
+    const targets = retailers && retailers.length > 0
+      ? RETAILERS.filter(r => retailers.includes(r.name))
+      : RETAILERS
+
+    // Check cache first
+    const cacheThreshold = new Date(Date.now() - CACHE_TTL_MS).toISOString()
+    const { data: cached, error: cacheError } = await supabase
+      .from('products')
+      .select('*')
+      .in('retailer', targets.map(r => r.name))
+      .gte('last_updated', cacheThreshold)
+      .range(page * 20, (page + 1) * 20 - 1)
+
+    if (!cacheError && cached && cached.length >= 10) {
+      return new Response(JSON.stringify(cached), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      })
+    }
+
+    // Fetch from Tavily
+    const tavilyKey = Deno.env.get('TAVILY_API_KEY')
+    if (!tavilyKey) {
+      return new Response(
+        JSON.stringify({ error: 'TAVILY_API_KEY not configured' }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
+    const results = await Promise.allSettled(
+      targets.map(retailer => fetchRetailer(query, retailer.domain, retailer.name, tavilyKey))
+    )
+
+    const products = results
+      .filter((r): r is PromiseFulfilledResult<any[]> => r.status === 'fulfilled')
+      .flatMap(r => r.value)
+
+    // Upsert products to cache
+    if (products.length > 0) {
+      const productsToUpsert = products.map(p => ({
+        ...p,
+        last_updated: new Date().toISOString(),
+      }))
+
+      await supabase.from('products').upsert(productsToUpsert)
+    }
+
+    const pageProducts = products.slice(page * 20, (page + 1) * 20)
+
+    return new Response(JSON.stringify(pageProducts), {
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    })
+
+  } catch (error) {
+    console.error('Error in aggregate-products:', error)
+    return new Response(
+      JSON.stringify({ error: getErrorMessage(error) }),
+      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    )
+  }
+})
 
 async function fetchRetailer(
   query: string,
   domain: string,
   retailerName: string,
   apiKey: string,
-): Promise<Product[]> {
+): Promise<any[]> {
   const res = await fetch('https://api.tavily.com/search', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -100,19 +146,21 @@ async function fetchRetailer(
     }),
   })
 
-  if (!res.ok) throw new Error(`Tavily error for ${domain}: ${res.status}`)
+  if (!res.ok) {
+    throw new Error(`Tavily error for ${domain}: ${res.status}`)
+  }
 
   const data = await res.json()
   return (data.results ?? [])
     .map((item: any, i: number) => normalizeResult(item, retailerName, i))
-    .sort((left: Product, right: Product) => {
+    .sort((left, right) => {
       const leftDirect = isLikelyListingUrl(left.product_url, retailerName) ? 1 : 0
       const rightDirect = isLikelyListingUrl(right.product_url, retailerName) ? 1 : 0
       return rightDirect - leftDirect
     })
 }
 
-function normalizeResult(item: any, retailer: string, index: number): Product {
+function normalizeResult(item: any, retailer: string, index: number): any {
   const sourceUrl = item.url ?? ''
   const resolvedUrl = isLikelyListingUrl(sourceUrl, retailer)
     ? sourceUrl
@@ -135,7 +183,6 @@ function normalizeResult(item: any, retailer: string, index: number): Product {
       source_score: typeof item.score === 'number' ? item.score : null,
       url_quality: isLikelyListingUrl(sourceUrl, retailer) ? 'listing' : 'search_fallback',
     },
-    last_updated: new Date().toISOString(),
   }
 }
 
@@ -193,4 +240,8 @@ function isLikelyListingUrl(rawUrl: string | null | undefined, retailer: string)
   }
 
   return LISTING_QUERY_KEYS.some((key) => url.searchParams.has(key))
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : 'Unknown error'
 }
