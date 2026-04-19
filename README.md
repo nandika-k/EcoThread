@@ -9,6 +9,8 @@ At a high level, the project does two things:
 
 The current product-facing name in the UI is **EcoThread**. You may still see older names like **ReWear** or `sustainable-fashion` in package names, comments, or older docs. Those refer to the same project lineage.
 
+Devpost: https://devpost.com/software/ecothread-t6hcsw
+
 ## Why this project exists
 
 Fashion sustainability information is usually buried, vague, or missing entirely. EcoThread tries to make that information visible at the moment a person is deciding what to buy.
