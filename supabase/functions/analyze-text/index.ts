@@ -361,6 +361,10 @@ function buildTextReply(
   return lines.join('\n')
 }
 
+function buildOwnershipPrompt(): string {
+  return 'Is this item first-hand or second-hand? Reply "first-hand" or "second-hand" and I\'ll estimate the CO2 comparison.'
+}
+
 const HELP_TEXT = `Sorry, I couldn't identify a brand or fabric from that message.
 
 Try formats like:
@@ -401,7 +405,7 @@ Deno.serve(async (req) => {
       fetchDedalusBrandAudit(parsed.brand),
     ])
 
-    const comparison = buildComparison(k2Result.score)
+    const comparison = buildOwnershipPrompt()
     const formattedReply = buildTextReply(
       parsed.brand,
       parsed.materials,

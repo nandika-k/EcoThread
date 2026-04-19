@@ -19,6 +19,40 @@ if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
   throw new Error('SUPABASE_URL and SUPABASE_ANON_KEY are required')
 }
 
+type OwnershipAnswer = 'first-hand' | 'second-hand'
+
+const pendingOwnershipBySender = new Map<string, { score: number }>()
+
+function parseOwnershipAnswer(raw: string): OwnershipAnswer | null {
+  const normalized = raw.trim().toLowerCase()
+
+  if (/^(first|first-hand|first hand|new|brand new)\b/.test(normalized)) {
+    return 'first-hand'
+  }
+
+  if (/^(second|second-hand|second hand|preowned|pre-owned|used|thrifted|resale)\b/.test(normalized)) {
+    return 'second-hand'
+  }
+
+  return null
+}
+
+function buildOwnershipReply(score: number, ownership: OwnershipAnswer): string {
+  const scoreLine = `The sustainability score stays ${score}/100 based on the item's materials and brand.`
+
+  if (ownership === 'second-hand') {
+    const savingsLine = score >= 70
+      ? `Because it's second-hand, it saves about ${Math.round(score * 0.3)} kg CO2 compared with buying a similar new item.`
+      : score >= 40
+        ? `Because it's second-hand, it saves about ${Math.round(score * 0.15)} kg CO2 compared with buying a similar new item.`
+        : `Because it's second-hand, it still avoids the impact of producing a similar new item, but the estimated CO2 savings are modest.`
+
+    return `${savingsLine}\n${scoreLine}\n\nPowered by Photon AI`
+  }
+
+  return `Got it. If you're buying it first-hand, there isn't an extra resale CO2 saving versus buying new.\n${scoreLine}\n\nPowered by Photon AI`
+}
+
 const app = await Spectrum({
   projectId: PHOTON_PROJECT_ID,
   projectSecret: PHOTON_PROJECT_SECRET,
@@ -29,10 +63,12 @@ console.log('[Photon] Bot online — listening for iMessages...')
 
 for await (const [space, message] of app.messages) {
   const content = message.content
+  const senderId = message.sender.id
 
   if (content.type === 'attachment' && content.mimeType?.startsWith('image/')) {
     try {
       const result = await space.responding(() => callAnalyzeTag(content.url, message.sender.id))
+      pendingOwnershipBySender.set(senderId, { score: result.score })
       await space.send(text(result.formattedReply))
     } catch (err) {
       console.error('[Bot] analyze-tag error:', err)
@@ -43,6 +79,24 @@ for await (const [space, message] of app.messages) {
   } else if (content.type === 'text') {
     const body = content.text?.trim().toLowerCase() ?? ''
     const rawBody = content.text?.trim() ?? ''
+    const ownershipAnswer = parseOwnershipAnswer(rawBody)
+
+    if (ownershipAnswer) {
+      const pending = pendingOwnershipBySender.get(senderId)
+
+      if (!pending) {
+        await space.send(
+          text(
+            'Send me a product score or tag photo first, then reply "first-hand" or "second-hand" and I\'ll estimate the CO2 comparison.\n\nPowered by Photon AI',
+          ),
+        )
+        continue
+      }
+
+      pendingOwnershipBySender.delete(senderId)
+      await space.send(text(buildOwnershipReply(pending.score, ownershipAnswer)))
+      continue
+    }
 
     if (body === 'help' || body === 'hi' || body === 'hello' || body === '') {
       await space.send(
@@ -61,6 +115,7 @@ for await (const [space, message] of app.messages) {
     } else {
       try {
         const result = await space.responding(() => callAnalyzeText(rawBody, message.sender.id))
+        pendingOwnershipBySender.set(senderId, { score: result.score })
         await space.send(text(result.formattedReply))
       } catch (err) {
         console.error('[Bot] analyze-text error:', err)

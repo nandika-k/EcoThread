@@ -64,7 +64,7 @@ Deno.serve(async (req) => {
     const k2Result = await k2Promise
     const dedalus = await fetchDedalusBrandAudit(k2Result.brand)
 
-    const comparison = buildComparison(k2Result.score)
+    const comparison = buildOwnershipPrompt()
 
     // Persist scan (best-effort, don't await)
     const supabase = createClient(
@@ -299,6 +299,10 @@ function buildSmsReply(input: {
   if (certifications.length > 0) lines.push(`Certs: ${certifications.join(', ')}`)
   lines.push('', 'Powered by Photon AI')
   return lines.join('\n')
+}
+
+function buildOwnershipPrompt(): string {
+  return 'Is this item first-hand or second-hand? Reply "first-hand" or "second-hand" and I\'ll estimate the CO2 comparison.'
 }
 
 function twilioReply(message: string): Response {
