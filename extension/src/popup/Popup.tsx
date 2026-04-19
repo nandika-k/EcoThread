@@ -1,6 +1,19 @@
 import { useEffect, useState } from 'react'
 import type { ExtensionStatus, ScrapedItem, SustainabilityBreakdown } from '../types/item'
+import type { Msg, Res } from '../lib/messages'
 import { send } from '../lib/messages'
+
+async function getActiveTabItem(): Promise<ScrapedItem | null> {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
+  if (!tab?.id) return null
+  return new Promise((resolve) => {
+    chrome.tabs.sendMessage(tab.id!, { kind: 'GET_CURRENT_ITEM' } satisfies Msg, (res: Res | undefined) => {
+      void chrome.runtime.lastError
+      if (res?.kind === 'CURRENT_ITEM') resolve(res.item)
+      else resolve(null)
+    })
+  })
+}
 
 type State = {
   status: ExtensionStatus
@@ -27,12 +40,16 @@ export function Popup(): JSX.Element {
     try {
       const s = await send({ kind: 'GET_STATUS' })
       const status = s.kind === 'STATUS' ? s.status : state.status
-      const c = await send({ kind: 'GET_CURRENT_ITEM' })
-      if (c.kind === 'CURRENT_ITEM') {
-        setState({ status, item: c.item, breakdown: c.breakdown, loading: false, error: null })
-      } else {
-        setState((p) => ({ ...p, status, loading: false }))
+
+      const item = await getActiveTabItem()
+      if (!item) {
+        setState((p) => ({ ...p, status, item: null, breakdown: null, loading: false }))
+        return
       }
+
+      const scored = await send({ kind: 'SCORE_ITEM', item })
+      const breakdown = scored.kind === 'SCORED' ? scored.breakdown : null
+      setState({ status, item, breakdown, loading: false, error: null })
     } catch (err) {
       setState((p) => ({ ...p, loading: false, error: err instanceof Error ? err.message : String(err) }))
     }
@@ -59,7 +76,7 @@ export function Popup(): JSX.Element {
   return (
     <div>
       <div className="titlebar">
-        <span>ReWear — Sustainability Scanner</span>
+        <span>EcoThread — Sustainability Scanner</span>
         <span>_ □ ×</span>
       </div>
       <div className="pixel-bar" />
@@ -226,7 +243,7 @@ function Footer(): JSX.Element {
   return (
     <div className="text-center text-xs text-text-silver pt-1">
       <div className="pixel-bar mb-2" />
-      ReWear · HackPrinceton 2026
+      EcoThread · HackPrinceton 2026
     </div>
   )
 }

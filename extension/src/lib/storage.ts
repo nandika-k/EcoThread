@@ -1,8 +1,8 @@
 import type { ExtensionStatus, CacheEntry, SustainabilityBreakdown, ScrapedItem } from '../types/item'
 
-const STATUS_KEY = 'rewear.status'
-const CACHE_PREFIX = 'rewear.cache.'
-const CURRENT_ITEM_KEY = 'rewear.currentItem'
+const STATUS_KEY = 'ecothread.status'
+const CACHE_PREFIX = 'ecothread.cache.'
+const CURRENT_ITEM_KEY = 'ecothread.currentItem'
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000
 
 export async function getStatus(): Promise<ExtensionStatus> {

@@ -1,12 +1,12 @@
 {
   "manifest_version": 3,
-  "name": "ReWear — Sustainable Fashion Scanner",
-  "short_name": "ReWear",
+  "name": "EcoThread — Sustainable Fashion Scanner",
+  "short_name": "EcoThread",
   "version": "0.1.0",
   "description": "Check sustainability scores on any shopping site. See where your clothes are made, what they're made of, and their carbon footprint.",
   "action": {
     "default_popup": "src/popup/index.html",
-    "default_title": "ReWear — Sustainability Scanner"
+    "default_title": "EcoThread — Sustainability Scanner"
   },
   "background": {
     "service_worker": "service-worker-loader.js",
@@ -15,7 +15,7 @@
   "content_scripts": [
     {
       "js": [
-        "assets/content-script.ts-De5R3FA7.js"
+        "assets/content-script.ts-BtaZ3Tm4.js"
       ],
       "matches": [
         "https://*.depop.com/*",
@@ -87,8 +87,8 @@
         "https://*.zara.com/*"
       ],
       "resources": [
-        "assets/content-script.ts-De5R3FA7.js",
-        "assets/content-script.ts-De5R3FA7.js.map"
+        "assets/content-script.ts-BtaZ3Tm4.js",
+        "assets/content-script.ts-BtaZ3Tm4.js.map"
       ],
       "use_dynamic_url": false
     }

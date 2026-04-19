@@ -12,7 +12,7 @@ Flip the scanner on, browse any supported shopping site, and the extension shows
 ## Supported sites
 
 Secondhand: Depop, Vinted, eBay, ThredUp, Vestiaire Collective, Whatnot.
-Fast fashion / retail: Zara, H&M, Shein, ASOS, Urban Outfitters, Nordstrom, Revolve, Amazon, any Shopify store.
+Fast fashion / retail: Zara, H&M, Shein, ASOS, Urban Outfitters, Nordstrom, Revolve, Amazon, Macy's, any Shopify store.
 
 The generic scraper reads Open Graph + JSON-LD metadata, so it falls back to "something reasonable" on any shop that exposes standard product markup.
 

@@ -1,24 +1,39 @@
 import type { Msg, Res } from '../lib/messages'
 import type { ScrapedItem } from '../types/item'
 import { scoreItem } from '../lib/api'
-import { getStatus, setStatus, getCached, setCached, setCurrentItem, getCurrentItem } from '../lib/storage'
+import { getStatus, setStatus, getCached, setCached } from '../lib/storage'
 
-async function handleItemDetected(item: ScrapedItem): Promise<void> {
-  await setCurrentItem(item)
-  await chrome.action.setBadgeBackgroundColor({ color: '#6040c0' })
-  await chrome.action.setBadgeText({ text: '•' })
+function badgeColor(score: number): string {
+  return score >= 65 ? '#1a8040' : score >= 35 ? '#906000' : '#a02020'
+}
+
+async function setBadge(tabId: number | undefined, score: number | null): Promise<void> {
+  if (tabId === undefined) return
+  if (score === null) {
+    await chrome.action.setBadgeText({ text: '', tabId })
+    return
+  }
+  await chrome.action.setBadgeBackgroundColor({ color: badgeColor(score), tabId })
+  await chrome.action.setBadgeText({ text: String(score), tabId })
+}
+
+async function handleItemDetected(item: ScrapedItem, tabId: number | undefined): Promise<number | null> {
+  await chrome.action.setBadgeBackgroundColor({ color: '#6040c0', tabId: tabId ?? 0 })
+  await chrome.action.setBadgeText({ text: '•', tabId: tabId ?? 0 })
 
   const cached = await getCached(item.url)
-  if (cached) return
+  if (cached) {
+    await setBadge(tabId, cached.breakdown.score)
+    return cached.breakdown.score
+  }
 
   const breakdown = await scoreItem(item)
   await setCached(item, breakdown)
-  await chrome.action.setBadgeText({ text: String(breakdown.score) })
-  const color = breakdown.score >= 65 ? '#1a8040' : breakdown.score >= 35 ? '#906000' : '#a02020'
-  await chrome.action.setBadgeBackgroundColor({ color })
+  await setBadge(tabId, breakdown.score)
+  return breakdown.score
 }
 
-chrome.runtime.onMessage.addListener((msg: Msg, _sender, reply) => {
+chrome.runtime.onMessage.addListener((msg: Msg, sender, reply) => {
   const handle = async (): Promise<Res> => {
     switch (msg.kind) {
       case 'GET_STATUS': {
@@ -30,26 +45,26 @@ chrome.runtime.onMessage.addListener((msg: Msg, _sender, reply) => {
         await setStatus(next)
         if (!msg.enabled) {
           await chrome.action.setBadgeText({ text: '' })
-          await setCurrentItem(null)
         }
         return { kind: 'STATUS', status: next }
       }
       case 'ITEM_DETECTED': {
-        await handleItemDetected(msg.item)
+        await handleItemDetected(msg.item, sender.tab?.id)
         const cached = await getCached(msg.item.url)
         return { kind: 'CURRENT_ITEM', item: msg.item, breakdown: cached?.breakdown ?? null }
       }
       case 'GET_CURRENT_ITEM': {
-        const item = await getCurrentItem()
-        if (!item) return { kind: 'CURRENT_ITEM', item: null, breakdown: null }
-        const cached = await getCached(item.url)
-        return { kind: 'CURRENT_ITEM', item, breakdown: cached?.breakdown ?? null }
+        return { kind: 'CURRENT_ITEM', item: null, breakdown: null }
       }
       case 'SCORE_ITEM': {
         const cached = await getCached(msg.item.url)
-        if (cached) return { kind: 'SCORED', breakdown: cached.breakdown }
+        if (cached) {
+          await setBadge(sender.tab?.id, cached.breakdown.score)
+          return { kind: 'SCORED', breakdown: cached.breakdown }
+        }
         const breakdown = await scoreItem(msg.item)
         await setCached(msg.item, breakdown)
+        await setBadge(sender.tab?.id, breakdown.score)
         return { kind: 'SCORED', breakdown }
       }
     }
@@ -65,16 +80,4 @@ chrome.runtime.onMessage.addListener((msg: Msg, _sender, reply) => {
 
 chrome.runtime.onInstalled.addListener(() => {
   void chrome.action.setBadgeText({ text: '' })
-})
-
-chrome.tabs.onActivated.addListener(async () => {
-  const item = await getCurrentItem()
-  if (!item) {
-    await chrome.action.setBadgeText({ text: '' })
-    return
-  }
-  const cached = await getCached(item.url)
-  if (cached) {
-    await chrome.action.setBadgeText({ text: String(cached.breakdown.score) })
-  }
 })
