@@ -51,17 +51,17 @@ Deno.serve(async (req) => {
       const body = await req.json()
       phoneNumber = body.phoneNumber ?? null
 
-      if (body.brand !== undefined || body.materialsText !== undefined) {
-        // Text input path — user typed brand + materials from the fabric tag
+      if (body.materialsText !== undefined) {
+        // Text input path — user typed brand + fabric composition from the garment tags
+        const materialsText = (body.materialsText as string) ?? ''
         const brand = (body.brand as string | undefined) ?? 'Unknown'
-        const materialsText = (body.materialsText as string | undefined) ?? ''
         analysisResult = await analyzeTagWithText(brand, materialsText)
       } else {
         // Image input path
         const imageSource: string = body.imageDataUrl ?? body.imageUrl
         if (!imageSource) {
           return new Response(
-            JSON.stringify({ error: 'Provide imageUrl/imageDataUrl or brand+materialsText' }),
+            JSON.stringify({ error: 'Provide imageUrl/imageDataUrl or materialsText' }),
             { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
           )
         }
@@ -253,7 +253,9 @@ function visionFallback(): K2VisionResult {
 
 // ─── K2-Think v2 text: score from typed brand + materials ─────
 
-const K2_TEXT_SYSTEM_PROMPT = `You are a sustainable fashion expert. Given a brand name and fabric composition typed from a clothing care label, score the garment's sustainability.
+const K2_TEXT_SYSTEM_PROMPT = `You are a sustainable fashion expert. Given a brand name and fabric composition typed from a garment's tags, score the garment's sustainability.
+
+The fabric composition may be written in any format — structured percentages, shorthand, plain language, or a mix. Parse whatever is provided.
 
 Scoring guide:
 - 70–100: Highly sustainable (recycled/organic/natural fibers, ethical brand, certifications)
@@ -267,12 +269,12 @@ Material scoring signals:
 - Virgin Polyester, Nylon, Acrylic, Spandex: low sustainability
 - Wool, Silk: moderate (natural but resource-intensive)
 
+Brand context may also influence the score — ethical brands with strong sustainability programs score higher.
 Normalize fiber names: e.g. "POLY" → "Polyester", "REC. POLY" → "Recycled Polyester", "ORG. COTTON" → "Organic Cotton".
-Percentages in materials must sum to 100.
+If percentages are missing or don't sum to 100, estimate reasonable splits.
 
 After your step-by-step reasoning, output exactly one JSON object on its own line:
 {
-  "brand": "<brand name or 'Unknown'>",
   "materials": [{"name": "<normalized fiber name>", "percentage": <0-100>}],
   "score": <0-100>,
   "explanation": "<one-sentence summary for a product card>",
@@ -294,7 +296,7 @@ async function analyzeTagWithText(brand: string, materialsText: string): Promise
         model: K2_V2_MODEL_ID,
         messages: [
           { role: 'system', content: K2_TEXT_SYSTEM_PROMPT },
-          { role: 'user', content: `Brand: ${brand}\nMaterials: ${materialsText}` },
+          { role: 'user', content: `Brand: ${brand}\nFabric composition: ${materialsText}` },
         ],
         max_tokens: 1024,
         temperature: 0.3,
@@ -315,7 +317,7 @@ async function analyzeTagWithText(brand: string, materialsText: string): Promise
 
     const parsed = JSON.parse(matches[matches.length - 1])
     return {
-      brand: parsed.brand ?? brand,
+      brand,
       materials: (parsed.materials ?? parseMaterialsText(materialsText)) as MaterialComponent[],
       countryOfOrigin: null,
       careInstructions: [],
@@ -337,7 +339,7 @@ function parseMaterialsText(text: string): MaterialComponent[] {
 
 function textFallback(brand: string, materialsText: string): K2VisionResult {
   return {
-    brand: brand || 'Unknown',
+    brand,
     materials: parseMaterialsText(materialsText),
     countryOfOrigin: null,
     careInstructions: [],
